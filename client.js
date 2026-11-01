@@ -365,6 +365,15 @@ window.__ModuleLoader__.load({
       if (!full) return
       if (!force && !voice.enabled) return
       const text = (marked || options.skipCondense) ? full : condenseForSpeech(full)
+      if (options.fromWatcher) {
+        const guard = window.__fairySpeakGuard || (window.__fairySpeakGuard = { text: '', at: 0 })
+        if (guard.text === text && Date.now() - guard.at < 6000) {
+          console.log('[fairy-tts] skip duplicate auto-read')
+          return
+        }
+        guard.text = text
+        guard.at = Date.now()
+      }
       const summarized = text !== full
       console.log('[fairy-tts] speak', summarized ? 'summarized' : 'full', 'len', full.length, '->', text.length)
       stopSpeech()
@@ -427,9 +436,9 @@ window.__ModuleLoader__.load({
         for (let i = nodes.length - 1; i >= 0; i -= 1) {
           const t = (nodes[i].innerText || '').trim()
           if (t.length < 8) continue
-          if (t.length > 4000) continue          /* 整个对话列表，跳过 */
+          if (t.length > 20000) continue         /* 整个对话列表，跳过 */
           console.log('[fairy-tts] read from', sel, 'index', i, 'len', t.length)
-          return t.slice(0, 900)
+          return t.slice(0, 12000)               /* 尾部标记行不能被截断 */
         }
       }
       console.log('[fairy-tts] no candidate found')
@@ -520,67 +529,161 @@ window.__ModuleLoader__.load({
       return !DAILY_BLOCKERS.some((word) => low.includes(word))
     }
 
-    /* 宿主不向消息组件传文本，自动朗读改为观察 DOM 里最新一条回复 */
-    let lastAutoText = ''
-    let autoPending = ''
-    let autoStable = 0
-    let autoWatchTimer = null
-    let lastUtterance = ''
+    /* 宿主不向消息组件传文本，自动朗读改为观察 DOM 里最新一条回复。
+       状态挂在 window 上：插件重载或重复挂载时只保留一个观察器，
+       否则多个实例各有各的账本，会把已读过的内容再念一遍（回声）。 */
+    const WATCH_KEY = '__fairyReplyWatch'
+    const CLIENT_REV = 'tts-2026-11-01-2220'
+
+    /* ——— 紧凑 MD5（UTF-8）———
+       用途：给“已朗读内容”和“会话指纹”做去重键。
+       文本可能上万字，比较字符串既慢又占日志；哈希后固定 32 位。 */
+    function md5(input) {
+      const str = unescape(encodeURIComponent(String(input ?? '')))
+      const bytes = []
+      for (let i = 0; i < str.length; i += 1) bytes.push(str.charCodeAt(i))
+      const bitLen = bytes.length * 8
+      bytes.push(0x80)
+      while (bytes.length % 64 !== 56) bytes.push(0)
+      for (let i = 0; i < 8; i += 1) bytes.push(Math.floor(bitLen / Math.pow(256, i)) & 0xff)
+      const S = [7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21]
+      const K = []
+      for (let i = 0; i < 64; i += 1) K.push(Math.floor(Math.abs(Math.sin(i + 1)) * 4294967296) | 0)
+      let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476
+      const rotl = (x, n) => ((x << n) | (x >>> (32 - n))) | 0
+      for (let off = 0; off < bytes.length; off += 64) {
+        const M = []
+        for (let i = 0; i < 16; i += 1) {
+          M.push(bytes[off + i * 4] | (bytes[off + i * 4 + 1] << 8) | (bytes[off + i * 4 + 2] << 16) | (bytes[off + i * 4 + 3] << 24))
+        }
+        let A = a0, B = b0, C = c0, D = d0
+        for (let i = 0; i < 64; i += 1) {
+          let F, g
+          if (i < 16) { F = (B & C) | (~B & D); g = i }
+          else if (i < 32) { F = (D & B) | (~D & C); g = (5 * i + 1) % 16 }
+          else if (i < 48) { F = B ^ C ^ D; g = (3 * i + 5) % 16 }
+          else { F = C ^ (B | ~D); g = (7 * i) % 16 }
+          F = (F + A + K[i] + M[g]) | 0
+          A = D
+          D = C
+          C = B
+          B = (B + rotl(F, S[(i >> 4) * 4 + (i % 4)])) | 0
+        }
+        a0 = (a0 + A) | 0
+        b0 = (b0 + B) | 0
+        c0 = (c0 + C) | 0
+        d0 = (d0 + D) | 0
+      }
+      const hex = (n) => {
+        let s = ''
+        for (let i = 0; i < 4; i += 1) s += ((n >>> (8 * i)) & 0xff).toString(16).padStart(2, '0')
+        return s
+      }
+      return hex(a0) + hex(b0) + hex(c0) + hex(d0)
+    }
+
+    /* DSH 把一条回复拆成多个 markdown 节点，所以拼接整段对话再取末尾标记行 */
+    const MD_SELECTOR = '[class*="markdown"]'
+    const MAX_NODES = 60
+
+    function fairyTrace(msg) {
+      try {
+        fetch('/dsh-fairy-zzz-for-jediliu/client-trace?e=' + encodeURIComponent(msg), { cache: 'no-store' }).catch(() => {})
+      } catch {}
+    }
+
+    function replyWatcher() {
+      if (!window[WATCH_KEY]) {
+        window[WATCH_KEY] = { timer: null, sessionKey: '', lastHash: '', pendingHash: '', pendingText: '', stable: 0 }
+      }
+      return window[WATCH_KEY]
+    }
+
+    function transcript() {
+      let path = ''
+      try {
+        path = location.pathname + location.search
+      } catch {}
+      let nodes = []
+      try {
+        nodes = document.querySelectorAll(MD_SELECTOR)
+      } catch {}
+      const n = nodes.length
+      if (!n) return { text: '', count: 0, fp: path + '|none' }
+      const from = Math.max(0, n - MAX_NODES)
+      const parts = []
+      for (let i = from; i < n; i += 1) {
+        const t = nodes[i].innerText
+        if (t) parts.push(t)
+      }
+      const firstText = (nodes[0].innerText || '').trim().slice(0, 200)
+      return {
+        text: parts.join('\n').slice(-20000),
+        count: n,
+        /* 会话指纹 = 路径 + 首节点文本哈希 */
+        fp: path + '|' + md5(firstText)
+      }
+    }
 
     function startReplyWatcher() {
-      if (autoWatchTimer) return
-      let seeded = false
-      /* 启动时先把当前最后一条记为基线，避免把历史消息读一遍 */
-      try {
-        const baseline = readLatestReplyText()
-        if (baseline) {
-          lastAutoText = baseline
-          seeded = true
-        }
-      } catch {}
-      autoWatchTimer = setInterval(() => {
+      const g = replyWatcher()
+      if (g.timer) {
+        clearInterval(g.timer)
+        g.timer = null
+        console.log('[fairy] reply watcher reset (previous instance stopped)')
+      }
+      console.log('[fairy] client rev', CLIENT_REV)
+      const v0 = transcript()
+      g.sessionKey = v0.fp
+      const m0 = extractSpeechLine(v0.text)
+      g.lastHash = m0 ? md5(m0) : ''
+      g.pendingHash = ''
+      g.pendingText = ''
+      g.stable = 0
+      fairyTrace('boot rev=' + CLIENT_REV + ' nodes=' + v0.count + ' base=' + (g.lastHash ? g.lastHash.slice(0, 8) : '-'))
+
+      g.timer = setInterval(() => {
         try {
           if (!voice.enabled) return
           if (Date.now() < autoArmAt) return
-          const latest = readLatestReplyText()
-          if (!latest) return
-          if (!seeded) {
-            seeded = true
-            lastAutoText = latest
+
+          const v = transcript()
+          if (v.fp !== g.sessionKey) {
+            g.sessionKey = v.fp
+            const m = extractSpeechLine(v.text)
+            g.lastHash = m ? md5(m) : ''
+            g.pendingHash = ''
+            g.pendingText = ''
+            g.stable = 0
+            fairyTrace('switch nodes=' + v.count + ' base=' + (g.lastHash ? g.lastHash.slice(0, 8) : '-'))
             return
           }
-          if (latest === lastAutoText) {
-            autoPending = ''
-            autoStable = 0
+
+          const marked = extractSpeechLine(v.text)
+          if (!marked) return
+          const hash = md5(marked)
+          if (hash === g.lastHash) return            /* 已经念过这一条 */
+
+          if (hash !== g.pendingHash) {
+            g.pendingHash = hash
+            g.pendingText = marked
+            g.stable = 1
+            fairyTrace('cand hash=' + hash.slice(0, 8) + ' len=' + marked.length)
             return
           }
-          if (latest !== autoPending) {
-            autoPending = latest
-            autoStable = 1
-            return
-          }
-          autoStable += 1
-          if (autoStable < 3) return          /* 稳定三次再读，避开流式输出中途 */
-          const marked = extractSpeechLine(latest)
-          const text = marked || stripDecorative(latest)
-          lastAutoText = latest
-          autoPending = ''
-          autoStable = 0
-          if (!text) return
-          if (text === lastUtterance) return
-          if (lastUtterance && text.startsWith(lastUtterance)) {
-            /* 同一句还在往下写（流式），先不读 */
-            lastUtterance = text
-            return
-          }
-          if (!marked && !isDailyShort(text)) return
-          lastUtterance = text
-          console.log('[fairy-tts] auto-read len', text.length)
-          speakText(text, { force: true, skipCondense: true })
+          g.stable += 1
+          if (g.stable < 2) return                   /* 同一句稳定两轮才读 */
+
+          g.lastHash = hash
+          g.pendingHash = ''
+          g.stable = 0
+          fairyTrace('speak hash=' + hash.slice(0, 8) + ' len=' + marked.length)
+          speakText(marked, { force: true, skipCondense: true, fromWatcher: true })
         } catch (error) {
           console.log('[fairy] reply watcher error', String(error))
         }
       }, 1500)
+      return g
     }
 
     function autoRead(el, messageId, providedText) {
@@ -1914,6 +2017,12 @@ body::after{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opac
             return undefined
           }
         }
+
+        guard('client-ping', () => {
+          try {
+            fetch('/dsh-fairy-zzz-for-jediliu/client-ping?rev=' + encodeURIComponent(CLIENT_REV), { cache: 'no-store' }).catch(() => {})
+          } catch {}
+        })
 
         guard('reply-watcher', () => startReplyWatcher())
 

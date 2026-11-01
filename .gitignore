@@ -13,3 +13,7 @@ fairy-tts.json
 node_modules/
 screenshots/
 screenshots.json
+
+# 客户端探针与追踪日志（含 UA与对话片段，不入库）
+client-rev.log
+client-trace.log

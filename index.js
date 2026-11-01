@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, appendFileSync, writeFileSync } from 'node:fs'
 import { mkdir, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -653,6 +653,39 @@ export function apply(ctx) {
         } catch (cause) {
           sendJson(res, 502, { ok: false, reason: String(cause?.message || cause) })
         }
+      },
+    }),
+  )
+
+  /* 客户端决策追踪：把观察器每轮的判断写盘，便于不带控制台定位 DOM 情况 */
+  ctx.effect(() =>
+    webServer.register({
+      kind: 'prefix',
+      path: '/dsh-fairy-zzz-for-jediliu/client-trace',
+      handler: (req, res) => {
+        try {
+          const url = new URL(req.url ?? '/', 'http://localhost')
+          const e = String(url.searchParams.get('e') || '').slice(0, 400)
+          if (e) appendFileSync(join(HERE, 'client-trace.log'), `${new Date().toISOString()}\t${e}\n`)
+        } catch {}
+        sendJson(res, 200, { ok: true })
+      },
+    }),
+  )
+
+  /* 客户端版本探针：前端装载时自报，落盘便于核对是否真的加载了新代码 */
+  ctx.effect(() =>
+    webServer.register({
+      kind: 'prefix',
+      path: '/dsh-fairy-zzz-for-jediliu/client-ping',
+      handler: (req, res) => {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const rev = String(url.searchParams.get('rev') || '').slice(0, 64)
+        try {
+          const line = `${new Date().toISOString()}\t${rev}\t${req.headers['user-agent'] || ''}\n`
+          writeFileSync(join(HERE, 'client-rev.log'), line, { flag: 'a' })
+        } catch {}
+        sendJson(res, 200, { ok: true, rev })
       },
     }),
   )
