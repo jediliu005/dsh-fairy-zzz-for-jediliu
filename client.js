@@ -486,11 +486,20 @@ window.__ModuleLoader__.load({
     const AUTO_READ_CALLS = []
 
     /* 回复末尾的朗读标记：技术回复用摘要，日常回复用吐槽 */
-    const SPEECH_MARK = /^【读(?:[·・](摘要|吐槽))?】\s*(.+)$/m
+    const SPEECH_MARK = /^【读(?:[·・](摘要|吐槽))?】\s*(.+)$/gm
 
+    /* 取【最后一条】标记行：容器里可能堆着多条历史回复 */
     function extractSpeechLine(text) {
-      const hit = String(text ?? '').match(SPEECH_MARK)
-      return hit ? String(hit[2]).trim() : ''
+      const source = String(text ?? '')
+      let out = ''
+      let hit
+      SPEECH_MARK.lastIndex = 0
+      while ((hit = SPEECH_MARK.exec(source)) !== null) {
+        const line = String(hit[2] || '').trim()
+        if (line) out = line
+      }
+      SPEECH_MARK.lastIndex = 0
+      return out
     }
 
     /* 去掉代码块、方框字符画、emoji 等装饰，只留可朗读正文 */
@@ -516,7 +525,7 @@ window.__ModuleLoader__.load({
     let autoPending = ''
     let autoStable = 0
     let autoWatchTimer = null
-    let lastSpokenFull = ''
+    let lastUtterance = ''
 
     function startReplyWatcher() {
       if (autoWatchTimer) return
@@ -545,13 +554,6 @@ window.__ModuleLoader__.load({
             autoStable = 0
             return
           }
-          if (lastSpokenFull && latest.startsWith(lastSpokenFull)) {
-            /* 同一条回复在流式里变长：只更新基线，不重复朗读 */
-            lastAutoText = latest
-            autoPending = ''
-            autoStable = 0
-            return
-          }
           if (latest !== autoPending) {
             autoPending = latest
             autoStable = 1
@@ -565,8 +567,15 @@ window.__ModuleLoader__.load({
           autoPending = ''
           autoStable = 0
           if (!text) return
+          if (text === lastUtterance) return
+          if (lastUtterance && text.startsWith(lastUtterance)) {
+            /* 同一句还在往下写（流式），先不读 */
+            lastUtterance = text
+            return
+          }
           if (!marked && !isDailyShort(text)) return
-          lastSpokenFull = latest
+          lastUtterance = text
+          console.log('[fairy-tts] auto-read len', text.length)
           speakText(text, { force: true, skipCondense: true })
         } catch (error) {
           console.log('[fairy] reply watcher error', String(error))
