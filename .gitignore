@@ -1,0 +1,15 @@
+# 本机运行时产物：不进仓库
+cache/
+greet-gen/
+
+# 机器相关配置：绝不进仓库
+voice-home.txt
+fairy-tts.json
+
+# 备份与临时文件
+*.bak
+*.bak-*
+*.log
+node_modules/
+screenshots/
+screenshots.json
