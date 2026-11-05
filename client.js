@@ -20,6 +20,21 @@ window.__ModuleLoader__.load({
     const GREETING = () => '/dsh-fairy-zzz-for-jediliu/assets/voice/greet-' + greetSlot() + '.wav'
     /* 动态问候优先：先请求当日生成件，404 时回落到内置语音 */
     const GREET_DYN = (slot) => '/dsh-fairy-zzz-for-jediliu/greet/' + slot + '?t=' + Date.now()
+    /* 当日台词文本：与动态语音同一份 texts.json，开机文字直接用它，保证字声一致 */
+    let greetTextCache = null
+    async function fetchGreetText() {
+      if (greetTextCache) return greetTextCache
+      try {
+        const res = await fetch('/dsh-fairy-zzz-for-jediliu/greet-text/' + greetSlot(), { cache: 'no-store' })
+        if (!res.ok) return ''
+        const data = await res.json()
+        const text = data && data.ok && typeof data.text === 'string' ? data.text.trim() : ''
+        if (text) greetTextCache = text
+        return text
+      } catch {
+        return ''
+      }
+    }
     let greetAudioEl = null
     function createGreetingAudio() {
       const slot = greetSlot()
@@ -1748,6 +1763,13 @@ body::after{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opac
 
     function FairySkin() {
       const [phase, setPhase] = useState('greet')
+      /* 开机文字：优先用与语音同源的当日台词，取不到才回落内置按时段文案 */
+      const [greetText, setGreetText] = useState('')
+      useEffect(() => {
+        let alive = true
+        fetchGreetText().then((text) => { if (alive && text) setGreetText(text) })
+        return () => { alive = false }
+      }, [])
 
       /* 运行态情绪：宿主 /dsh-fairy-zzz-for-jediliu/mood 轮询（idle / thinking / working / done） */
       const [mood, setMood] = useState('idle')
@@ -1984,7 +2006,7 @@ body::after{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opac
               h(
                 'div',
                 { className: 'fz3-copy-lines' },
-                h('span', null, greetLine()),
+                h('span', null, greetText || greetLine()),
               ),
               h('div', { className: 'fz3-copy-sub' }, t('greet.sub')),
             )
