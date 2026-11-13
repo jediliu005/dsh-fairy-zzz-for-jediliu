@@ -1,7 +1,7 @@
 {
   "name": "dsh-fairy-zzz-for-jediliu",
-  "version": "1.0.0-for-jediliu.1",
-  "description": "Personal build of the Fairy skin for DSH (H.D.D boot animation, eye core, greeting, optional local TTS).",
+  "version": "1.0.2",
+  "description": "Fairy 主题：H.D.D 启动动画、眼核、问候与可选本地 TTS。",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -17,13 +17,16 @@
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
-    "./icon": "./assets/icon-180.png"
+    "./icon": "./assets/icon-180.png",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "icon": "assets/icon-180.png",
   "files": [
     "index.js",
     "client.js",
     "cordis.patch.yml",
+    "locale",
     "assets",
     "icon.svg",
     "README.md",
@@ -39,5 +42,9 @@
       "immediately": true,
       "inject": []
     }
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.0-rc.2"
   }
 }

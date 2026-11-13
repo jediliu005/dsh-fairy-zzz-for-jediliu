@@ -548,7 +548,7 @@ window.__ModuleLoader__.load({
        状态挂在 window 上：插件重载或重复挂载时只保留一个观察器，
        否则多个实例各有各的账本，会把已读过的内容再念一遍（回声）。 */
     const WATCH_KEY = '__fairyReplyWatch'
-    const CLIENT_REV = 'tts-2026-11-01-2220'
+    const CLIENT_REV = 'tts-skip-2026-11-12-1105'
 
     /* ——— 紧凑 MD5（UTF-8）———
        用途：给“已朗读内容”和“会话指纹”做去重键。
@@ -876,7 +876,7 @@ body::after{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opac
 .fz3-corner.tr{right:20px;top:44px;border-left:0;border-bottom:0}
 .fz3-corner.bl{left:20px;bottom:96px;border-right:0;border-top:0}
 .fz3-corner.br{right:20px;bottom:96px;border-left:0;border-top:0}
-.fz3-boot-foot{position:absolute;left:32px;right:32px;bottom:30px;display:flex;flex-direction:column;gap:12px}
+.fz3-boot-foot{position:absolute;left:32px;right:32px;bottom:52px;display:flex;flex-direction:column;gap:12px}
 .fz3-boot-row{display:flex;align-items:center;gap:18px;width:100%}
 .fz3-boot-title{font-size:10px;letter-spacing:.3em;color:rgba(206,238,255,.82);white-space:nowrap}
 .fz3-boot-checks{display:flex;gap:16px;font-size:9px;letter-spacing:.18em;color:rgba(126,196,240,.6);margin-left:auto}
@@ -885,9 +885,10 @@ body::after{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opac
 .fz3-boot-bar span{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,#2f7bff,#57e8ff);box-shadow:0 0 16px rgba(87,232,255,.95);transition:width .22s linear}
 .fz3-boot-pct{font-size:10.5px;font-variant-numeric:tabular-nums;color:#a9ecff;min-width:38px;text-align:right;letter-spacing:.1em}
 .fz3-skip{
-  pointer-events:auto;font:inherit;font-size:9.5px;letter-spacing:.26em;color:rgba(206,240,255,.85);
-  background:rgba(6,16,34,.55);border:1px solid rgba(110,220,255,.38);padding:7px 14px;cursor:pointer;flex:none;
-  clip-path:polygon(0 0,100% 0,calc(100% - 9px) 100%,0 100%);
+  position:fixed;left:50%;bottom:clamp(8px,1.4vh,14px);transform:translateX(-50%);z-index:20;
+  pointer-events:auto;font:inherit;font-size:11.5px;letter-spacing:.3em;color:rgba(206,240,255,.85);
+  background:rgba(6,16,34,.55);border:1px solid rgba(110,220,255,.38);padding:9px 20px;cursor:pointer;flex:none;
+  clip-path:polygon(0 0,100% 0,calc(100% - 10px) 100%,0 100%);
 }
 .fz3-skip:hover{background:rgba(87,232,255,.18);color:#fff;border-color:rgba(87,232,255,.75)}
 
@@ -1064,10 +1065,14 @@ body::after{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opac
 .fz3-copy-sub{margin-top:clamp(6px,1.4vh,16px);font-size:clamp(7px,.66vw,8.5px);letter-spacing:.32em;color:rgba(122,178,230,.6);text-indent:.32em}
 .fz3-copy-tap{margin-top:14px;font-size:10px;letter-spacing:.2em;color:rgba(255,201,60,.85);animation:fz3-blink 1.6s ease-in-out infinite}
 .fz3-skip2{
-  position:absolute;right:clamp(12px,2.4vw,30px);bottom:clamp(10px,2.6vh,26px);pointer-events:auto;background:none;border:0;font:inherit;
-  font-size:9.5px;letter-spacing:.26em;color:rgba(150,200,235,.55);cursor:pointer;padding:8px;
+  position:fixed;left:50%;bottom:clamp(8px,1.4vh,14px);transform:translateX(-50%);z-index:20;pointer-events:auto;
+  background:rgba(6,16,34,.55);border:1px solid rgba(110,220,255,.38);font:inherit;
+  font-size:11.5px;letter-spacing:.3em;color:rgba(206,240,255,.85);cursor:pointer;padding:9px 20px;
+  clip-path:polygon(0 0,100% 0,calc(100% - 10px) 100%,0 100%);
 }
-.fz3-skip2:hover{color:#9fefff}
+.fz3-skip2:hover{background:rgba(87,232,255,.18);color:#fff;border-color:rgba(87,232,255,.75)}
+/* 全局 button:active 的 translateY 会覆盖居中用的 translateX，导致按下瞬间右移、点击丢失 */
+button.fz3-skip:active,button.fz3-skip2:active{transform:translateX(-50%) translateY(1px)}
 
 /* ---------- 左下角坞 ---------- */
 .fz3-tag{
@@ -1965,14 +1970,19 @@ body::after{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opac
                 ref: coreRef,
                 className: 'fz3-core',
                 'data-phase': phase,
-                title: phase === 'dock' ? 'Fairy · 上下拖动可移动' : undefined,
+                title: phase === 'dock'
+                  ? (voiceState.busy || voiceState.speaking ? 'Fairy · 点击停止朗读，上下拖动可移动' : 'Fairy · 上下拖动可移动')
+                  : undefined,
                 onPointerDown: (event) => {
                   if (phase !== 'dock') return
                   event.preventDefault()
+                  const startX = event.clientX
                   const startY = event.clientY
                   const startDy = dockDragDy
                   const base = dockBaseY == null ? window.innerHeight * 0.52 : dockBaseY
+                  let moved = false
                   const move = (ev) => {
+                    if (Math.abs(ev.clientX - startX) > 5 || Math.abs(ev.clientY - startY) > 5) moved = true
                     const limit = window.innerHeight * 0.4
                     dockDragDy = Math.max(-limit, Math.min(limit, startDy + (ev.clientY - startY)))
                     document.documentElement.style.setProperty(
@@ -1980,15 +1990,23 @@ body::after{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opac
                       Math.round(base + dockDragDy) + 'px',
                     )
                   }
-                  const up = () => {
+                  const cleanup = () => {
                     window.removeEventListener('pointermove', move)
                     window.removeEventListener('pointerup', up)
-                    window.removeEventListener('pointercancel', up)
+                    window.removeEventListener('pointercancel', cancel)
+                  }
+                  const up = () => {
+                    cleanup()
+                    try { writeStored(DOCK_DY_KEY, dockDragDy) } catch {}
+                    if (!moved && (voiceState.busy || voiceState.speaking)) stopSpeech()
+                  }
+                  const cancel = () => {
+                    cleanup()
                     try { writeStored(DOCK_DY_KEY, dockDragDy) } catch {}
                   }
                   window.addEventListener('pointermove', move)
                   window.addEventListener('pointerup', up)
-                  window.addEventListener('pointercancel', up)
+                  window.addEventListener('pointercancel', cancel)
                 },
               },
               h(CoreGlyph, { phase, mood }),
